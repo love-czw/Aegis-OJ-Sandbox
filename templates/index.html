@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>Aegis Engine 监控终端</title>
+    <style>
+        body { background-color: #0b0f19; color: #a9b7c6; font-family: 'Consolas', 'Courier New', monospace; padding: 2rem; margin: 0; }
+        .dashboard { max-width: 900px; margin: 0 auto; }
+        h1 { color: #00ff41; border-bottom: 2px solid #333; padding-bottom: 10px; }
+        .card { background: #151a25; border: 1px solid #2a3345; border-radius: 8px; padding: 20px; margin-bottom: 20px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }
+        .input-group { display: flex; gap: 15px; margin-bottom: 20px; }
+        input { background: #0b0f19; border: 1px solid #00ff41; color: #00ff41; padding: 10px; border-radius: 4px; flex: 1; text-align: center; font-size: 1.1rem; outline: none; }
+        button { background: #00ff41; color: #0b0f19; border: none; padding: 10px 20px; font-weight: bold; cursor: pointer; border-radius: 4px; font-size: 1.1rem; transition: all 0.2s; width: 100%; }
+        button:hover { background: #00cc33; box-shadow: 0 0 15px #00ff41; }
+        .terminal { background: #000; border: 1px solid #333; padding: 15px; height: 200px; overflow-y: auto; border-radius: 4px; }
+        .log { margin: 5px 0; color: #ccc; }
+        .sys-ok { color: #00ff41; }
+        .result-card { border-left: 5px solid #00ff41; font-size: 1.5rem; }
+    </style>
+</head>
+<body>
+    <div class="dashboard">
+        <h1>🛡️ Aegis Sandbox & AI Engine</h1>
+        
+        <div class="card">
+            <h3>[数据注入] 动态特征输入 (X)</h3>
+            <div class="input-group">
+                <input type="number" id="f1" value="1.0" step="0.1">
+                <input type="number" id="f2" value="-2.0" step="0.1">
+                <input type="number" id="f3" value="3.0" step="0.1">
+            </div>
+            <button onclick="launchEngine()">▶ 发起全栈评测请求</button>
+        </div>
+
+        <div class="card">
+            <h3>[沙盒监控] 底层 Cgroups / Seccomp 执行日志</h3>
+            <div class="terminal" id="terminal">
+                <div class="log sys-ok">等待系统接入...</div>
+            </div>
+        </div>
+
+        <div class="card result-card" id="result-box" style="display: none;">
+            <strong>引擎运算结果: </strong> <span id="output" style="color:#00ff41;"></span>
+            <div style="font-size: 1rem; color: #888; margin-top: 10px;">处理耗时: <span id="time"></span> ms</div>
+        </div>
+    </div>
+
+    <script>
+        async function launchEngine() {
+            const f1 = document.getElementById('f1').value;
+            const f2 = document.getElementById('f2').value;
+            const f3 = document.getElementById('f3').value;
+            const term = document.getElementById('terminal');
+            
+            term.innerHTML = '<div class="log">🚀 发起 HTTP 请求...</div><div class="log">⚡ 唤醒 Python 管道...</div>';
+            document.getElementById('result-box').style.display = 'none';
+
+            try {
+                // 向我们的 Flask 后端发起请求
+                const res = await fetch(`/api/predict?f1=${f1}&f2=${f2}&f3=${f3}`);
+                const data = await res.json();
+                
+                term.innerHTML = '';
+                data.sandbox_logs.forEach(log => {
+                    term.innerHTML += `<div class="log sys-ok">${log}</div>`;
+                });
+
+                document.getElementById('result-box').style.display = 'block';
+                document.getElementById('output').innerText = JSON.stringify(data.ai_engine_output.prediction);
+                document.getElementById('time').innerText = data.process_time_ms;
+            } catch (e) {
+                term.innerHTML += `<div class="log" style="color:red;">❌ 请求失败: ${e}</div>`;
+            }
+        }
+    </script>
+</body>
+</html>
