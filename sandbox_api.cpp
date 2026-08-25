@@ -10,6 +10,20 @@ using namespace std;
 
 namespace {
 
+void write_message(int fd, const char* message, size_t length) {
+    size_t written = 0;
+    while (written < length) {
+        const ssize_t result = write(fd, message + written, length - written);
+        if (result > 0) {
+            written += static_cast<size_t>(result);
+        } else if (result < 0 && errno == EINTR) {
+            continue;
+        } else {
+            break;
+        }
+    }
+}
+
 int add_rule(scmp_filter_ctx ctx, int syscall) {
     return seccomp_rule_add(ctx, SCMP_ACT_ALLOW, syscall, 0);
 }
@@ -88,7 +102,7 @@ int main() {
         if (setup_seccomp() != 0) {
             static constexpr char err_msg[] =
                 "[Aegis-Child] FATAL: Seccomp 初始化失败，拒绝执行引擎！\n";
-            write(STDERR_FILENO, err_msg, sizeof(err_msg) - 1);
+            write_message(STDERR_FILENO, err_msg, sizeof(err_msg) - 1);
             _exit(127);
         }
 
@@ -96,7 +110,7 @@ int main() {
 
         static constexpr char exec_err[] =
             "[Aegis-Child] FATAL: execl 加载引擎失败！\n";
-        write(STDERR_FILENO, exec_err, sizeof(exec_err) - 1);
+        write_message(STDERR_FILENO, exec_err, sizeof(exec_err) - 1);
         _exit(127);
     }
 
