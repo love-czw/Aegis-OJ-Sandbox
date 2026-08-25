@@ -39,3 +39,25 @@ g++ sandbox_api.cpp -o sandbox_api -lseccomp
 # 3. 启动全栈网关
 python3 app.py
 ```
+
+## ✅ 自动化测试
+
+测试分为两层：
+
+- **API 单元测试**：使用可控的假进程验证输入校验、返回码映射、超时和结果协议，可在 macOS/Linux 快速运行。
+- **Linux 集成测试**：在 Ubuntu 容器里编译真实静态引擎和恶意探针，验证 Seccomp、进程组超时及输出限制。
+
+本机快速测试：
+
+```bash
+python3 -m pip install -r requirements-dev.txt
+make test
+```
+
+在一次性 Ubuntu 容器中执行完整测试：
+
+```bash
+make test-docker
+```
+
+容器运行阶段关闭网络，并只解除 Docker 外层 Seccomp 配置，以便测试程序加载自己的、更严格的白名单；无需 `--privileged`。

@@ -1,0 +1,8 @@
+.venv/
+.pytest_cache/
+__pycache__/
+*.py[cod]
+
+# Linux build outputs are reproducible and must not be committed.
+engine
+sandbox_api
