@@ -33,8 +33,9 @@ sudo apt-get install -y libseccomp-dev python3-pip
 pip3 install flask
 
 # 2. 编译核心安全沙盒与 AI 引擎
-g++ engine.cpp -o engine
+g++ -static engine.cpp -o engine
 g++ sandbox_api.cpp -o sandbox_api -lseccomp
 
 # 3. 启动全栈网关
 python3 app.py
+```
