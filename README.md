@@ -1,63 +1,172 @@
-# Aegis-OJ-Sandbox: 企业级 Linux 内核安全评测沙盒
+# Aegis-OJ-Sandbox
 
-本项目是一个基于 Linux 内核底层机制（Cgroups V2 + Seccomp）纯 C++ 打造的高性能代码评测沙盒与 AI 算子推理网关。结合 Python Flask 实现跨语言微服务通信，提供从系统底层到前端监控面板的完整闭环。
+Aegis 是一个面向学习与工程验证的受控执行原型：Flask 负责 HTTP 接口、输入校验与错误协议，C++ 启动器负责 `fork/exec`、进程状态回收与 Seccomp 过滤，固定的静态链接引擎负责演示标准输入/输出协议。
 
-> 💡 **核心定位：** 展现对计算机底层架构（11408）概念的工程化落地能力，专为高并发、高安全的 Online Judge (OJ) 评测系统与 AI 推理服务设计。目前作为在校学生求职软件研发与 AI 算法工程师实习的核心展示项目。
+**技术栈：** C++17 · Linux · libseccomp · Python · Flask · pytest · Docker
 
-## 🚀 核心硬核技术 (Core Tech Stack)
+> 当前版本只执行仓库内固定的 `./engine`，不接收用户源码或任意可执行文件。它不是完整 OJ，也不是可直接用于生产环境的通用不可信代码沙箱。
 
-### 1. 物理资源绝对隔离 (Linux Cgroups V2)
-- 弃用传统的应用层限制，直接调用 Linux 操作系统内核的 `cgroups v2` 机制。
-- 采用 C++ 操控 `memory.max` 和 `memory.swap.max` 节点，精确划定 20MB 物理内存上限，并**打补丁封死 Swap 穿透漏洞**。
-- **实战效果**：完美防范恶意代码的“内存泄露”与“资源耗尽攻击 (MLE)”，越界进程会被内核 OOM Killer (Signal 9) 瞬间物理超度，主服务器稳如泰山。
+## 已实现能力
 
-### 2. 系统调用拦截拦截 (Seccomp BPF)
-- 引入 `libseccomp` 开发库，在子进程 `fork` 之后、`exec` 执行外部不受信代码之前，为其戴上“内核手铐”。
-- **实战效果**：建立严格的系统调用白名单，精准拦截 `mkdir`、`execve`、`open` 等高危系统调用。防范删库跑路或植入后门 (RE)，实现真正的系统级防伪篡改。
+- `POST /api/v1/predict` JSON 接口，限制请求体为 4 KiB。
+- 校验 `features` 必须为恰好 3 个有限数值，且绝对值不超过 `1,000,000`。
+- 使用 `Popen(start_new_session=True)` 创建独立执行会话；执行超过 1 秒时通过进程组信号终止并回收子进程。
+- 分别限制 stdout、stderr 为 64 KiB，最多向客户端返回 100 行日志。
+- 校验 C++ 引擎输出协议，将超时、非法系统调用、启动失败、异常退出和协议错误映射为稳定的 HTTP/JSON 错误。
+- 在 C++ 子进程中设置 `PR_SET_NO_NEW_PRIVS`，并使用 `SCMP_ACT_KILL_PROCESS` 作为 Seccomp 默认策略。
+- 对 stdin/stdout/stderr 的 `read/write` 设置文件描述符约束；Seccomp 规则创建或加载失败时拒绝执行引擎。
+- 提供 pytest API 单元测试和 Ubuntu 22.04 Docker 集成测试。
 
-### 3. 高性能算子与 Cache 优化
-- 核心引擎 (`engine.cpp`) 采用纯 C++ 编写前向传播网络。
-- 深入计算机组成原理，针对矩阵乘法 ($X \times W + b$) 进行**空间局部性 (Spatial Locality)** 优化，大幅降低 Cache Miss 率。配合 ReLU 激活函数，实测端到端推理耗时压制在 3ms 级别。
+## 执行链路
 
-### 4. 跨语言微服务架构 (C++ / Python IPC)
-- 使用 Python Flask 作为 API 流量网关，处理并发 HTTP 请求。
-- 通过操作系统进程间通信 (IPC) 管道，将前端动态特征流式注入到底层 C++ 沙盒的 `stdin` 中，实现毫秒级的跨语言数据调度。
-
-## ⚙️ 快速启动 (Quick Start)
-
-为了保证内核权限调用的安全性，本项目推荐在 Ubuntu 22.04 LTS (支持 Cgroups V2) 环境下运行：
-
-```bash
-# 1. 安装核心依赖
-sudo apt-get install -y libseccomp-dev python3-pip
-pip3 install flask
-
-# 2. 编译核心安全沙盒与 AI 引擎
-g++ -static engine.cpp -o engine
-g++ sandbox_api.cpp -o sandbox_api -lseccomp
-
-# 3. 启动全栈网关
-python3 app.py
+```text
+HTTP Client
+    |
+    | POST /api/v1/predict
+    v
+Flask API: 请求校验、超时、输出上限、错误映射
+    |
+    | stdin: "1 -2 3\n"
+    v
+sandbox_api: fork -> PR_SET_NO_NEW_PRIVS -> Seccomp -> exec
+    |
+    v
+固定静态引擎: stdout JSON
+    |
+    v
+Flask: 协议校验 -> 结构化响应
 ```
 
-## ✅ 自动化测试
+`engine.cpp` 是一个 3 输入、2 输出的线性层加 ReLU 示例，只用于验证受控执行链路和输出协议，不代表完整 AI 推理服务。
 
-测试分为两层：
+## API 示例
 
-- **API 单元测试**：使用可控的假进程验证输入校验、返回码映射、超时和结果协议，可在 macOS/Linux 快速运行。
-- **Linux 集成测试**：在 Ubuntu 容器里编译真实静态引擎和恶意探针，验证 Seccomp、进程组超时及输出限制。
+请求：
 
-本机快速测试：
+```bash
+curl -X POST http://127.0.0.1:8888/api/v1/predict \
+  -H 'Content-Type: application/json' \
+  -d '{"features":[1.0,-2.0,3.0]}'
+```
+
+成功响应结构：
+
+```json
+{
+  "status": "ok",
+  "result": {
+    "status": "success",
+    "prediction": [2.3, 0]
+  },
+  "execution": {
+    "wall_ms": 1.23,
+    "return_code": 0
+  },
+  "sandbox_logs": []
+}
+```
+
+`wall_ms` 是每次请求的实际测量值，上面的数字只用于展示响应格式，不代表性能基准。
+
+主要错误码：
+
+| 错误码 | HTTP 状态 | 含义 |
+| --- | ---: | --- |
+| `INVALID_INPUT` | 400 | JSON 或特征值不符合接口约束 |
+| `REQUEST_TOO_LARGE` | 413 | 请求体超过 4 KiB |
+| `UNSUPPORTED_MEDIA_TYPE` | 415 | Content-Type 不是 JSON |
+| `SANDBOX_VIOLATION` | 422 | 引擎触发未授权系统调用并收到 `SIGSYS` |
+| `OUTPUT_LIMIT_EXCEEDED` | 422 | stdout 或 stderr 超过 64 KiB |
+| `ENGINE_FAILED` | 422 | 引擎以非零状态退出 |
+| `SANDBOX_CRASHED` | 502 | 沙盒进程被其他信号终止 |
+| `EXECUTION_TIMEOUT` | 504 | 执行超过 1 秒，进程组已终止 |
+| `SANDBOX_UNAVAILABLE` | 503 | 沙盒二进制无法启动 |
+| `SANDBOX_START_FAILED` | 503 | Seccomp 初始化或引擎加载失败 |
+| `SANDBOX_PROTOCOL_ERROR` | 502 | 引擎未返回唯一且合法的 JSON 结果 |
+
+## 本地运行
+
+推荐在 Ubuntu 22.04 上运行。需要 Python 3、C++17 编译器和 libseccomp 开发包：
+
+```bash
+sudo apt-get update
+sudo apt-get install -y g++ libseccomp-dev python3 python3-venv
+
+python3 -m venv .venv
+source .venv/bin/activate
+python -m pip install -r requirements.txt
+g++ -std=c++17 -O2 -static engine.cpp -o engine
+g++ -std=c++17 -O2 sandbox_api.cpp -o sandbox_api -lseccomp
+python app.py
+```
+
+服务默认监听 `0.0.0.0:8888`，本机浏览器可打开 `http://127.0.0.1:8888` 进行演示。`app.py` 使用 Flask 开发服务器，只适合本地演示与测试。
+
+## 测试
+
+API 单元测试使用可控假进程验证输入、输出、错误码和进程控制契约，可在 macOS 或 Linux 上运行：
 
 ```bash
 python3 -m pip install -r requirements-dev.txt
 make test
 ```
 
-在一次性 Ubuntu 容器中执行完整测试：
+在已经安装 `g++` 和 `libseccomp-dev` 的 Linux 环境运行真实集成测试：
+
+```bash
+make test-integration
+```
+
+Linux 集成测试会编译真实启动器、静态引擎与攻击探针，覆盖：
+
+- 正常请求与预测结果；
+- 文件读取和 socket 创建触发 `SIGSYS`；
+- 死循环超时后无残留引擎进程；
+- 输出洪泛被上限拒绝；
+- 引擎缺失时失败关闭。
+
+使用一次性 Ubuntu 22.04 容器运行完整测试：
 
 ```bash
 make test-docker
 ```
 
-容器运行阶段关闭网络，并只解除 Docker 外层 Seccomp 配置，以便测试程序加载自己的、更严格的白名单；无需 `--privileged`。
+容器运行时关闭网络，并仅关闭 Docker 外层默认 Seccomp，以便测试程序加载自己的更严格过滤器；测试不使用 `--privileged`。
+
+## 安全边界
+
+当前实现只面向仓库内固定的静态链接演示引擎。已有验证范围为 Ubuntu 22.04/ARM64；其他架构、libc、编译器或目标程序都需要重新跟踪系统调用并运行回归测试。
+
+以下能力尚未实现：
+
+- Cgroups v2 的内存、CPU 和 PID 配额；
+- mount/PID/network/user namespace 隔离；
+- 降权、capability 清理和只读文件系统；
+- 按任务创建的独立工作目录与文件清理；
+- 面向任意用户代码的编译、运行和判题流程；
+- 生产级并发、性能基准与高可用部署。
+
+Seccomp 只能按系统调用号和参数值过滤，不能按路径字符串限制 `execve`。当前启动链路为了加载固定引擎会放行 `execve`，因此不能把这套原型表述为“禁止任意程序执行”或“完整文件系统隔离”。
+
+此外，64 KiB 输出限制是在进程输出写入临时文件后检查并拒绝，不是实时磁盘写入配额；1 秒超时由 Flask 网关执行，也不是内核级 CPU 配额。
+
+## 项目结构
+
+```text
+app.py                              Flask API、进程控制和输出协议
+sandbox_api.cpp                     C++ fork/exec 与 Seccomp 启动器
+engine.cpp                          固定静态演示引擎
+templates/index.html                简单演示页面
+tests/test_app.py                   API 单元测试
+tests/integration/test_linux_sandbox.py  Linux 集成测试
+tests/fixtures/                     文件、socket、死循环和输出探针
+Dockerfile.test                     Ubuntu 22.04 测试环境
+```
+
+## 后续计划
+
+- [ ] 增加 Cgroups v2 资源限制与清理逻辑。
+- [ ] 增加 namespace、降权和只读文件系统隔离。
+- [ ] 在 x86_64 与 ARM64 环境持续运行集成测试。
+- [ ] 完成威胁模型、性能基线和可复现实验记录。
+- [ ] 在隔离边界完善后，再扩展为通用编译执行任务。
