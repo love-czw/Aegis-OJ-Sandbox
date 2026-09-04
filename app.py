@@ -47,7 +47,12 @@ def validate_features(payload):
     for value in features:
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             raise ValueError("features 中的每一项都必须是数值")
-        number = float(value)
+        try:
+            number = float(value)
+        except (OverflowError, ValueError) as exc:
+            raise ValueError(
+                f"features 的绝对值不能超过 {MAX_FEATURE_ABS:g}"
+            ) from exc
         if not math.isfinite(number):
             raise ValueError("features 不能包含 NaN 或 Infinity")
         if abs(number) > MAX_FEATURE_ABS:
@@ -58,7 +63,8 @@ def validate_features(payload):
 
 
 def read_limited(output_file):
-    size = output_file.tell()
+    output_file.flush()
+    size = os.fstat(output_file.fileno()).st_size
     output_file.seek(0)
     data = output_file.read(MAX_OUTPUT_BYTES)
     return data.decode("utf-8", errors="replace"), size > MAX_OUTPUT_BYTES
@@ -86,8 +92,8 @@ def parse_engine_output(stdout):
         if line.startswith("{"):
             try:
                 candidate = json.loads(line)
-            except json.JSONDecodeError as exc:
-                raise ValueError("沙盒输出了损坏的 JSON") from exc
+            except (json.JSONDecodeError, RecursionError) as exc:
+                raise ValueError("沙盒输出的 JSON 无效或嵌套过深") from exc
             if isinstance(candidate, dict):
                 result_candidates.append(candidate)
                 continue
@@ -103,13 +109,15 @@ def parse_engine_output(stdout):
         raise ValueError("引擎没有返回 success 状态")
     if not isinstance(prediction, list) or len(prediction) != 2:
         raise ValueError("prediction 必须包含 2 个数值")
-    if any(
-        isinstance(value, bool)
-        or not isinstance(value, (int, float))
-        or not math.isfinite(float(value))
-        for value in prediction
-    ):
-        raise ValueError("prediction 包含非法数值")
+    for value in prediction:
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise ValueError("prediction 包含非法数值")
+        try:
+            finite = math.isfinite(float(value))
+        except (OverflowError, ValueError):
+            finite = False
+        if not finite:
+            raise ValueError("prediction 包含非法数值")
 
     return result, logs
 
@@ -163,6 +171,7 @@ def predict():
             process = subprocess.Popen(
                 [str(SANDBOX_BINARY)],
                 cwd=BASE_DIR,
+                env={},
                 stdin=subprocess.PIPE,
                 stdout=stdout_file,
                 stderr=stderr_file,
@@ -276,4 +285,4 @@ def predict():
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=8888)
+    app.run(host="127.0.0.1", port=8888)

@@ -33,6 +33,7 @@ def install_fake_process(
     *,
     stdout=SUCCESS_STDOUT,
     stderr="",
+    stdout_seek_to=None,
     returncode=0,
     times_out=False,
     launch_error=None,
@@ -57,6 +58,8 @@ def install_fake_process(
                 raise subprocess.TimeoutExpired(self.command, timeout)
             self.kwargs["stdout"].write(stdout.encode())
             self.kwargs["stderr"].write(stderr.encode())
+            if stdout_seek_to is not None:
+                self.kwargs["stdout"].seek(stdout_seek_to)
 
         def wait(self, timeout=None):
             self.waited = True
@@ -107,6 +110,7 @@ def test_successful_prediction_uses_expected_process_contract(client, monkeypatc
     assert process.kwargs["cwd"] == app_module.BASE_DIR
     assert process.kwargs["start_new_session"] is True
     assert process.kwargs["close_fds"] is True
+    assert process.kwargs["env"] == {}
     assert process.input == b"1 -2 3\n"
     assert process.timeout == app_module.SANDBOX_TIMEOUT_SECONDS
 
@@ -154,6 +158,18 @@ def test_malformed_json_is_rejected(client):
 def test_invalid_features_are_rejected_before_process_launch(
     client, monkeypatch, payload
 ):
+    def unexpected_popen(*_args, **_kwargs):
+        pytest.fail("invalid input must not launch the sandbox")
+
+    monkeypatch.setattr(app_module.subprocess, "Popen", unexpected_popen)
+    assert_error(post_json(client, payload), 400, "INVALID_INPUT")
+
+
+def test_large_integer_is_rejected_before_process_launch(client, monkeypatch):
+    payload = {"features": [int("9" * 309), 2, 3]}
+    encoded_payload = json.dumps(payload).encode()
+    assert len(encoded_payload) < app_module.app.config["MAX_CONTENT_LENGTH"]
+
     def unexpected_popen(*_args, **_kwargs):
         pytest.fail("invalid input must not launch the sandbox")
 
@@ -214,11 +230,53 @@ def test_invalid_engine_protocol_never_becomes_http_200(
     assert_error(response, 502, "SANDBOX_PROTOCOL_ERROR")
 
 
+def test_large_integer_in_engine_prediction_is_protocol_error(client, monkeypatch):
+    stdout = (
+        '{"status":"success","prediction":['
+        + "9" * 309
+        + ",0]}\n"
+    )
+    install_fake_process(monkeypatch, stdout=stdout)
+
+    response = post_json(client, {"features": [1, 2, 3]})
+
+    assert_error(response, 502, "SANDBOX_PROTOCOL_ERROR")
+
+
+def test_deeply_nested_engine_json_is_protocol_error(client, monkeypatch):
+    depth = 10_000
+    stdout = (
+        '{"status":"success","prediction":[1,2],"nested":'
+        + "[" * depth
+        + "0"
+        + "]" * depth
+        + "}\n"
+    )
+    assert len(stdout.encode()) < app_module.MAX_OUTPUT_BYTES
+    install_fake_process(monkeypatch, stdout=stdout)
+
+    response = post_json(client, {"features": [1, 2, 3]})
+
+    assert_error(response, 502, "SANDBOX_PROTOCOL_ERROR")
+
+
 @pytest.mark.parametrize("stream", ["stdout", "stderr"])
 def test_output_over_limit_is_rejected(client, monkeypatch, stream):
     kwargs = {stream: "x" * (app_module.MAX_OUTPUT_BYTES + 1)}
     install_fake_process(monkeypatch, **kwargs)
     response = post_json(client, {"features": [1, 2, 3]})
+    assert_error(response, 422, "OUTPUT_LIMIT_EXCEEDED")
+
+
+def test_output_limit_uses_file_size_not_current_offset(client, monkeypatch):
+    install_fake_process(
+        monkeypatch,
+        stdout="x" * (app_module.MAX_OUTPUT_BYTES + 1),
+        stdout_seek_to=1,
+    )
+
+    response = post_json(client, {"features": [1, 2, 3]})
+
     assert_error(response, 422, "OUTPUT_LIMIT_EXCEEDED")
 
 

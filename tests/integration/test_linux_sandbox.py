@@ -148,6 +148,17 @@ def test_output_flood_is_rejected(tmp_path, linux_build, monkeypatch):
     assert payload["error"]["code"] == "OUTPUT_LIMIT_EXCEEDED"
 
 
+def test_output_limit_uses_file_size_after_engine_seeks_back(
+    tmp_path, linux_build, monkeypatch
+):
+    runtime = prepare_runtime(tmp_path, linux_build, "output_seek_back")
+    response = call_api(monkeypatch, runtime)
+
+    assert response.status_code == 422
+    payload = response.get_json()
+    assert payload["error"]["code"] == "OUTPUT_LIMIT_EXCEEDED"
+
+
 def test_missing_engine_is_fail_closed(tmp_path, linux_build, monkeypatch):
     runtime = tmp_path / "missing-engine"
     runtime.mkdir()
